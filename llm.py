@@ -19,6 +19,7 @@ from aiohttp import web
 from comfy_api.latest import io as comfy_io
 from server import PromptServer
 # import google.generativeai as genai
+import httpx
 import numpy as np
 import openai
 import aisuite as ai
@@ -583,19 +584,34 @@ class Chat:
                         history.append({"role": "assistant", "content": "好的，我会按照你的指示来操作"})
                         break
             # Create the OpenAI client
+            #
+            # Explicit timeout: the openai-python default is
+            # httpx.Timeout(timeout=600, connect=5.0) - a generous read
+            # timeout but only a 5s *connect* timeout. Self-hosted backends
+            # (Ollama, often behind a proxy like LiteLLM) can stall for a
+            # few seconds accepting a new connection while loading a large
+            # model into VRAM, and a fresh client is created on every call
+            # here (no connection reuse across requests), so each call pays
+            # that connect cost again. Widen both: a longer connect timeout
+            # absorbs a cold model load, and a longer read timeout covers
+            # long non-streaming "thinking" responses from reasoning models
+            # on slower hardware.
+            client_timeout = httpx.Timeout(timeout=1800.0, connect=30.0)
             if "api.perplexity.ai" in self.baseurl:
                 try:
                     # Use the simplest possible client initialization for Perplexity
                     openai_client = OpenAI(
                         api_key=self.apikey,
-                        base_url="https://api.perplexity.ai"
+                        base_url="https://api.perplexity.ai",
+                        timeout=client_timeout,
                     )
                 except Exception as e:
                     print(f"Error initializing Perplexity client: {e}")
                     # Fallback to standard initialization
                     openai_client = OpenAI(
                         api_key=self.apikey,
-                        base_url=self.baseurl
+                        base_url=self.baseurl,
+                        timeout=client_timeout,
                     )
             elif "openai.azure.com" in self.baseurl:
                 # 获取API版本
@@ -606,12 +622,14 @@ class Chat:
                     api_key= self.apikey,
                     api_version=api_version,
                     azure_endpoint=azure_endpoint,
+                    timeout=client_timeout,
                 )
                 openai_client = azure
             else:
                 openai_client = OpenAI(
                     api_key=self.apikey,
                     base_url=self.baseurl,
+                    timeout=client_timeout,
                 )
             new_message = {"role": "user", "content": user_prompt}
             history.append(new_message)
@@ -836,8 +854,17 @@ class Chat:
                 response_content = response_content.replace(match.group(0), "").strip() 
             history.append({"role": "assistant", "content": response_content})
         except Exception as ex:
-            response_content = str(ex)
-            reasoning_content = str(ex)
+            # Previously this just set response_content = str(ex), which
+            # silently substitutes the exception text in place of the
+            # model's actual reply/reasoning - a timeout (e.g.
+            # openai.APITimeoutError on a long local "thinking" response)
+            # would look exactly like a normal answer instead of a visible
+            # failure. Log the full traceback to the console and mark the
+            # substituted text clearly so it can't be mistaken for real
+            # model output.
+            traceback.print_exc()
+            response_content = f"[LLM Party request failed: {ex}]"
+            reasoning_content = response_content
         return response_content, history,reasoning_content
 
 
@@ -1206,8 +1233,17 @@ class aisuite_Chat:
                 response_content = response_content.replace(match.group(0), "").strip() 
             history.append({"role": "assistant", "content": response_content})
         except Exception as ex:
-            response_content = str(ex)
-            reasoning_content = str(ex)
+            # Previously this just set response_content = str(ex), which
+            # silently substitutes the exception text in place of the
+            # model's actual reply/reasoning - a timeout (e.g.
+            # openai.APITimeoutError on a long local "thinking" response)
+            # would look exactly like a normal answer instead of a visible
+            # failure. Log the full traceback to the console and mark the
+            # substituted text clearly so it can't be mistaken for real
+            # model output.
+            traceback.print_exc()
+            response_content = f"[LLM Party request failed: {ex}]"
+            reasoning_content = response_content
         return response_content, history,reasoning_content
 
 
@@ -1499,7 +1535,13 @@ class LLM:
                 "extra_parameters": ("DICT", {"forceInput": True, "tooltip": "Extra parameters for the LLM."}),
                 "user_history": ("STRING", {"forceInput": True, "tooltip": "User history, you can directly input a JSON string containing multiple rounds of dialogue here."}),
                 "img_URL": ("STRING", {"forceInput": True, "tooltip": "The URL of the image."}),
-                "stream": ("BOOLEAN", {"default": False, "tooltip": "Whether to enable streaming output."}),
+                # Default changed to True: a non-streaming call blocks for
+                # the entire response (thinking + answer) in one shot with
+                # no visible progress, which is far more exposed to any
+                # client/proxy timeout when talking to a slow local
+                # reasoning model. Streaming trickles tokens continuously,
+                # so an idle/body timeout only fires on a genuine stall.
+                "stream": ("BOOLEAN", {"default": True, "tooltip": "Whether to enable streaming output."}),
             },
         }
 
@@ -1554,7 +1596,7 @@ class LLM:
         extra_parameters=None,
         user_history=None,
         img_URL=None,
-        stream=False,
+        stream=True,
     ):
         if not is_enable:
             return (
