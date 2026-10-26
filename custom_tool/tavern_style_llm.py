@@ -18,6 +18,19 @@ from PIL import Image
 current_dir_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(current_dir_path, "config.ini")
 
+# Debug flag gating console logging of user prompts, model
+# responses/reasoning, and tool-call arguments/results - off by default.
+# Same flag name as llm.py's own copy (this module is loaded standalone via
+# importlib.util.spec_from_file_location, so it can't rely on a relative
+# import back to the package root). Enable with:
+#   LLMPARTY_DEBUG_LOG_CONTENT=1
+LLM_PARTY_DEBUG_LOG_CONTENT = os.environ.get("LLMPARTY_DEBUG_LOG_CONTENT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def debug_print(*args, **kwargs):
+    if LLM_PARTY_DEBUG_LOG_CONTENT:
+        print(*args, **kwargs)
+
 
 def _ensure_version_suffix(base_url):
     if "api.perplexity.ai" in base_url:
@@ -316,7 +329,7 @@ class TavernStyleLLM:
             ]
 
             # === API CALL ===
-            print("[TavernStyleLLM] Sending messages:")
+            debug_print("[TavernStyleLLM] Sending messages:")
             for i, m in enumerate(history):
                 role = m.get("role", "?")
                 content = m.get("content", "")
@@ -324,7 +337,7 @@ class TavernStyleLLM:
                     content = "[multimodal]"
                 preview = content[:60] + "..." if len(content) > 60 else content
                 preview = preview.replace("\n", " ")
-                print(f"  [{i}] {role}: {preview}")
+                debug_print(f"  [{i}] {role}: {preview}")
 
             apikey = getattr(model, "apikey", "")
             baseurl = _ensure_version_suffix(getattr(model, "baseurl", ""))
@@ -358,10 +371,10 @@ class TavernStyleLLM:
                     if chunk.choices:
                         delta = chunk.choices[0].delta
                         if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                            print(delta.reasoning_content, end="", flush=True)
+                            debug_print(delta.reasoning_content, end="", flush=True)
                             reasoning_content += delta.reasoning_content
                         elif hasattr(delta, "content") and delta.content:
-                            print(delta.content, end="", flush=True)
+                            debug_print(delta.content, end="", flush=True)
                             response_content += delta.content
             else:
                 msg = response.choices[0].message

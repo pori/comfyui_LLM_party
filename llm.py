@@ -199,9 +199,22 @@ if enable_interpreter:
 instances = []
 image_buffer = []
 
+# Debug flag gating console logging of user prompts, model
+# responses/reasoning, and tool-call arguments/results - off by default.
+# This data can be anything the user typed, any file/URL content a tool
+# pulled in, or a model's raw chain-of-thought, none of which should land
+# in the ComfyUI console/log file unless explicitly asked for. Enable with:
+#   LLMPARTY_DEBUG_LOG_CONTENT=1
+LLM_PARTY_DEBUG_LOG_CONTENT = os.environ.get("LLMPARTY_DEBUG_LOG_CONTENT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def debug_print(*args, **kwargs):
+    if LLM_PARTY_DEBUG_LOG_CONTENT:
+        print(*args, **kwargs)
+
 
 def another_llm(id, type, question):
-    print(id, type, question)
+    debug_print(id, type, question)
     global instances
     if type == "api":
         try:
@@ -315,7 +328,7 @@ def another_llm(id, type, question):
         )
     else:
         return "type参数错误，请使用api或local"
-    print(res)
+    debug_print(res)
     return "你调用的智能助手的问答是：" + res + "\n请根据以上回答，回答用户的问题。"
 
 
@@ -633,7 +646,7 @@ class Chat:
                 )
             new_message = {"role": "user", "content": user_prompt}
             history.append(new_message)
-            print(history)
+            debug_print(history)
             reasoning_content = ""
             if tools is not None:
                 response = create_openai_chat_completion(openai_client, 
@@ -663,17 +676,17 @@ class Chat:
                                         tool_calls[idx].function.arguments += tool.function.arguments
                             else: 
                                 if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                                    print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                    debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                     reasoning_content = reasoning_content + chunk.choices[0].delta.reasoning_content
                                 elif hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                    print(chunk.choices[0].delta.content, end="", flush=True)
+                                    debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                     response_content = response_content + chunk.choices[0].delta.content
                     while tool_calls:
                         response_content = tool_calls[0].function
-                        print("正在调用" + response_content.name + "工具")
-                        print(response_content.arguments)
+                        debug_print("正在调用" + response_content.name + "工具")
+                        debug_print(response_content.arguments)
                         results = dispatch_tool(response_content.name, json.loads(response_content.arguments))
-                        print(results)
+                        debug_print(results)
                         history.append(
                             {
                                 "tool_calls": [
@@ -724,21 +737,21 @@ class Chat:
                                             tool_calls[idx].function.arguments += tool.function.arguments
                                 else:                          
                                     if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                                        print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                        debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                         reasoning_content = reasoning_content + chunk.choices[0].delta.reasoning_content
                                     elif hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                        print(chunk.choices[0].delta.content, end="", flush=True)
+                                        debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                         response_content = response_content + chunk.choices[0].delta.content
                 else:
                     response_content = response.choices[0].message.content
-                    print(response_content)
+                    debug_print(response_content)
                     while response.choices[0].message.tool_calls:
                         assistant_message = response.choices[0].message
                         response_content = assistant_message.tool_calls[0].function
-                        print("正在调用" + response_content.name + "工具")
-                        print(response_content.arguments)
+                        debug_print("正在调用" + response_content.name + "工具")
+                        debug_print(response_content.arguments)
                         results = dispatch_tool(response_content.name, json.loads(response_content.arguments))
-                        print(results)
+                        debug_print(results)
                         history.append(
                             {
                                 "tool_calls": [
@@ -773,9 +786,9 @@ class Chat:
                         )
                         if hasattr(response.choices[0].message, 'reasoning_content') and response.choices[0].message.reasoning_content:
                             reasoning_content = response.choices[0].message.reasoning_content
-                            print(reasoning_content)
+                            debug_print(reasoning_content)
                         response_content = response.choices[0].message.content
-                        print(response_content)
+                        debug_print(response_content)
             elif is_tools_in_sys_prompt == "enable":
                 response = create_openai_chat_completion(openai_client, 
                     model=self.model_name,
@@ -792,10 +805,10 @@ class Chat:
                     tool = match.group(1)
                     parameters = match.group(2)
                     json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
-                    print("正在调用" + tool + "工具")
+                    debug_print("正在调用" + tool + "工具")
                     parameters = json.loads("{" + parameters + "}")
                     results = dispatch_tool(tool, parameters)
-                    print(results)
+                    debug_print(results)
                     history.append({"role": "assistant", "content": json_str})
                     history.append(
                         {
@@ -816,9 +829,9 @@ class Chat:
                     )
                     if hasattr(response.choices[0].message, 'reasoning_content') and response.choices[0].message.reasoning_content:
                         reasoning_content = response.choices[0].message.reasoning_content
-                        print(reasoning_content)
+                        debug_print(reasoning_content)
                     response_content = response.choices[0].message.content
-                    print(response_content)
+                    debug_print(response_content)
             else:
                 response = create_openai_chat_completion(openai_client, 
                     model=self.model_name,
@@ -834,18 +847,18 @@ class Chat:
                     for chunk in response:
                         if chunk.choices:
                             if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                                print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                 reasoning_content = reasoning_content + chunk.choices[0].delta.reasoning_content
                             elif hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                print(chunk.choices[0].delta.content, end="", flush=True)
+                                debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                 response_content = response_content + chunk.choices[0].delta.content
-                    print(response_content)
+                    debug_print(response_content)
                 else:
                     if hasattr(response.choices[0].message, 'reasoning_content') and response.choices[0].message.reasoning_content:
                         reasoning_content = response.choices[0].message.reasoning_content
-                        print(reasoning_content)
+                        debug_print(reasoning_content)
                     response_content = response.choices[0].message.content
-                    print(response_content)
+                    debug_print(response_content)
             # 使用正则表达式，提取response_content中<think>到</think>之间的内容到reasoning_content，之外的内容到response_content
             pattern = r'<think>(.*?)</think>'
             match = re.search(pattern, response_content, re.DOTALL)
@@ -1013,7 +1026,7 @@ class aisuite_Chat:
                     break
             new_message = {"role": "user", "content": user_prompt}
             history.append(new_message)
-            print(history)
+            debug_print(history)
             reasoning_content = ""
             if tools is not None:
                 response = create_openai_chat_completion(openai_client, 
@@ -1043,17 +1056,17 @@ class aisuite_Chat:
                                         tool_calls[idx].function.arguments += tool.function.arguments
                             else:       
                                 if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                                    print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                    debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                     reasoning_content = reasoning_content + chunk.choices[0].delta.reasoning_content
                                 elif hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                    print(chunk.choices[0].delta.content, end="", flush=True)
+                                    debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                     response_content = response_content + chunk.choices[0].delta.content
                     while tool_calls:
                         response_content = tool_calls[0].function
-                        print("正在调用" + response_content.name + "工具")
-                        print(response_content.arguments)
+                        debug_print("正在调用" + response_content.name + "工具")
+                        debug_print(response_content.arguments)
                         results = dispatch_tool(response_content.name, json.loads(response_content.arguments))
-                        print(results)
+                        debug_print(results)
                         history.append(
                             {
                                 "tool_calls": [
@@ -1104,21 +1117,21 @@ class aisuite_Chat:
                                             tool_calls[idx].function.arguments += tool.function.arguments
                                 else:                            
                                     if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                                        print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                        debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                         reasoning_content = reasoning_content + chunk.choices[0].delta.reasoning_content
                                     elif hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                        print(chunk.choices[0].delta.content, end="", flush=True)
+                                        debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                         response_content = response_content + chunk.choices[0].delta.content
                 else:
                     response_content = response.choices[0].message.content
-                    print(response_content)
+                    debug_print(response_content)
                     while response.choices[0].message.tool_calls:
                         assistant_message = response.choices[0].message
                         response_content = assistant_message.tool_calls[0].function
-                        print("正在调用" + response_content.name + "工具")
-                        print(response_content.arguments)
+                        debug_print("正在调用" + response_content.name + "工具")
+                        debug_print(response_content.arguments)
                         results = dispatch_tool(response_content.name, json.loads(response_content.arguments))
-                        print(results)
+                        debug_print(results)
                         history.append(
                             {
                                 "tool_calls": [
@@ -1153,9 +1166,9 @@ class aisuite_Chat:
                         )
                         if hasattr(response.choices[0].message, 'reasoning_content') and response.choices[0].message.reasoning_content:
                             reasoning_content = response.choices[0].message.reasoning_content
-                            print(reasoning_content)
+                            debug_print(reasoning_content)
                         response_content = response.choices[0].message.content
-                        print(response_content)
+                        debug_print(response_content)
             elif is_tools_in_sys_prompt == "enable":
                 response = create_openai_chat_completion(openai_client, 
                     model=self.model_name,
@@ -1172,10 +1185,10 @@ class aisuite_Chat:
                     tool = match.group(1)
                     parameters = match.group(2)
                     json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
-                    print("正在调用" + tool + "工具")
+                    debug_print("正在调用" + tool + "工具")
                     parameters = json.loads("{" + parameters + "}")
                     results = dispatch_tool(tool, parameters)
-                    print(results)
+                    debug_print(results)
                     history.append({"role": "assistant", "content": json_str})
                     history.append(
                         {
@@ -1196,9 +1209,9 @@ class aisuite_Chat:
                     )
                     if hasattr(response.choices[0].message, 'reasoning_content') and response.choices[0].message.reasoning_content:
                         reasoning_content = response.choices[0].message.reasoning_content
-                        print(reasoning_content)
+                        debug_print(reasoning_content)
                     response_content = response.choices[0].message.content
-                    print(response_content)
+                    debug_print(response_content)
             else:
                 response = create_openai_chat_completion(openai_client, 
                     model=self.model_name,
@@ -1214,17 +1227,17 @@ class aisuite_Chat:
                     for chunk in response:
                         if chunk.choices:
                             if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                                print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                 reasoning_content = reasoning_content + chunk.choices[0].delta.reasoning_content
                             elif hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                                print(chunk.choices[0].delta.content, end="", flush=True)
+                                debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                 response_content = response_content + chunk.choices[0].delta.content
                 else:
                     if hasattr(response.choices[0].message, 'reasoning_content') and response.choices[0].message.reasoning_content:
                         reasoning_content = response.choices[0].message.reasoning_content
-                        print(reasoning_content)
+                        debug_print(reasoning_content)
                     response_content = response.choices[0].message.content
-                    print(response_content)
+                    debug_print(response_content)
             # 使用正则表达式，提取response_content中<think>到</think>之间的内容到reasoning_content，之外的内容到response_content
             pattern = r'<think>(.*?)</think>'
             match = re.search(pattern, response_content, re.DOTALL)
@@ -1778,7 +1791,7 @@ class LLM:
                                 message["content"] += "\n" + TOOL_EAXMPLE + "\n" + GPT_INSTRUCTION + "\n"
 
                 if tools is not None:
-                    print(tools)
+                    debug_print(tools)
                     tools = json.loads(tools)
 
                 max_length = int(max_length)
@@ -2583,7 +2596,7 @@ class LLM_local:
                             if model_type in ["LLM", "VLM(testing)"]:
                                 message["content"] += "\n" + TOOL_EAXMPLE + "\n" + GPT_INSTRUCTION + "\n"
                 if tools is not None:
-                    print(tools)
+                    debug_print(tools)
                     tools = json.loads(tools)
 
                 def is_valid_json(json_str):
@@ -2628,10 +2641,10 @@ class LLM_local:
                         parameters = match.group(2)
                         json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
                         history.append({"role": "function_call", "content": json_str})
-                        print("正在调用" + tool + "工具")
+                        debug_print("正在调用" + tool + "工具")
                         parameters = json.loads("{" + parameters + "}")
                         results = dispatch_tool(tool, parameters)
-                        print(results)
+                        debug_print(results)
                         if extra_parameters is not None and extra_parameters != {}:
                             response, history = llm_chat(
                                 model,
@@ -2687,7 +2700,7 @@ class LLM_local:
                                 max_tokens=max_length,
                             )
                         response = f"{response['choices'][0]['message']['content']}"
-                        print(response)
+                        debug_print(response)
                         assistant_content = {"role": "assistant", "content": response}
                         history.append(assistant_content)
                     else:
@@ -2730,9 +2743,9 @@ class LLM_local:
                     assistant_message = f"{response['choices'][0]['message']['content']}"
                     while assistant_message.startswith('{"name":'):
                         response_content = json.loads(assistant_message)
-                        print("正在调用" + response_content['name'] + "工具")
+                        debug_print("正在调用" + response_content['name'] + "工具")
                         results = dispatch_tool(response_content['name'], response_content['parameters'])
-                        print(results)
+                        debug_print(results)
                         assistant_content = {"role": "function_call", "content": assistant_message}
                         history.append(assistant_content)    
                         history.append(
@@ -2756,7 +2769,7 @@ class LLM_local:
                                 max_tokens=max_length,
                                 tools=tools,
                             )
-                        print(response)   
+                        debug_print(response)   
                         assistant_message = f"{response['choices'][0]['message']['content']}"
                     assistant_content = {"role": "assistant", "content": assistant_message}
                     response= assistant_message
@@ -2790,10 +2803,10 @@ class LLM_local:
                         parameters = match.group(2)
                         json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
                         history.append({"role": "function_call", "content": json_str})
-                        print("正在调用" + tool + "工具")
+                        debug_print("正在调用" + tool + "工具")
                         parameters = json.loads("{" + parameters + "}")
                         results = dispatch_tool(tool, parameters)
-                        print(results)
+                        debug_print(results)
                         if extra_parameters is not None and extra_parameters != {}:
                             response, history = llama_chat(
                                 model,
@@ -2848,10 +2861,10 @@ class LLM_local:
                         parameters = match.group(2)
                         json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
                         history.append({"role": "function_call", "content": json_str})
-                        print("正在调用" + tool + "工具")
+                        debug_print("正在调用" + tool + "工具")
                         parameters = json.loads("{" + parameters + "}")
                         results = dispatch_tool(tool, parameters)
-                        print(results)
+                        debug_print(results)
                         if extra_parameters is not None and extra_parameters != {}:
                             response, history = qwen_chat(
                                 model,
@@ -2906,10 +2919,10 @@ class LLM_local:
                         parameters = match.group(2)
                         json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
                         history.append({"role": "function_call", "content": json_str})
-                        print("正在调用" + tool + "工具")
+                        debug_print("正在调用" + tool + "工具")
                         parameters = json.loads("{" + parameters + "}")
                         results = dispatch_tool(tool, parameters)
-                        print(results)
+                        debug_print(results)
                         if extra_parameters is not None and extra_parameters != {}:
                             response, history = ds_chat(
                                 model,
@@ -2936,7 +2949,7 @@ class LLM_local:
                                 temperature=temperature,
                             )   
                     self.images = []
-                print(response)
+                debug_print(response)
                 # 修改prompt.json文件
                 history_get = [history[0]]
                 history_get.extend(history_copy)

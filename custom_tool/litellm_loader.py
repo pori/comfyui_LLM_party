@@ -1,11 +1,25 @@
 import base64
 import io
 import json
+import os
 import re
 
 import numpy as np
 import requests
 from PIL import Image
+
+# Debug flag gating console logging of user prompts, model
+# responses/reasoning, and tool-call arguments/results - off by default.
+# Same flag name as llm.py's own copy (this module is loaded standalone via
+# importlib.util.spec_from_file_location, so it can't rely on a relative
+# import back to the package root). Enable with:
+#   LLMPARTY_DEBUG_LOG_CONTENT=1
+LLM_PARTY_DEBUG_LOG_CONTENT = os.environ.get("LLMPARTY_DEBUG_LOG_CONTENT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def debug_print(*args, **kwargs):
+    if LLM_PARTY_DEBUG_LOG_CONTENT:
+        print(*args, **kwargs)
 
 
 def _format_litellm_error(ex):
@@ -125,7 +139,7 @@ class litellm_Chat:
 
             new_message = {"role": "user", "content": user_prompt}
             history.append(new_message)
-            print(history)
+            debug_print(history)
             reasoning_content = ""
 
             completion_kwargs = {
@@ -165,19 +179,19 @@ class litellm_Chat:
                                     hasattr(chunk.choices[0].delta, "reasoning_content")
                                     and chunk.choices[0].delta.reasoning_content
                                 ):
-                                    print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                    debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                     reasoning_content += chunk.choices[0].delta.reasoning_content
                                 elif hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
-                                    print(chunk.choices[0].delta.content, end="", flush=True)
+                                    debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                     response_content += chunk.choices[0].delta.content
                     while tool_calls:
                         response_content = tool_calls[0].function
-                        print("Calling tool: " + response_content.name)
-                        print(response_content.arguments)
+                        debug_print("Calling tool: " + response_content.name)
+                        debug_print(response_content.arguments)
                         from ..llm import dispatch_tool
 
                         results = dispatch_tool(response_content.name, json.loads(response_content.arguments))
-                        print(results)
+                        debug_print(results)
                         history.append(
                             {
                                 "tool_calls": [
@@ -223,23 +237,23 @@ class litellm_Chat:
                                         hasattr(chunk.choices[0].delta, "reasoning_content")
                                         and chunk.choices[0].delta.reasoning_content
                                     ):
-                                        print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                        debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                         reasoning_content += chunk.choices[0].delta.reasoning_content
                                     elif hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
-                                        print(chunk.choices[0].delta.content, end="", flush=True)
+                                        debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                         response_content += chunk.choices[0].delta.content
                 else:
                     response_content = response.choices[0].message.content or ""
-                    print(response_content)
+                    debug_print(response_content)
                     while response.choices[0].message.tool_calls:
                         assistant_message = response.choices[0].message
                         response_content = assistant_message.tool_calls[0].function
-                        print("Calling tool: " + response_content.name)
-                        print(response_content.arguments)
+                        debug_print("Calling tool: " + response_content.name)
+                        debug_print(response_content.arguments)
                         from ..llm import dispatch_tool
 
                         results = dispatch_tool(response_content.name, json.loads(response_content.arguments))
-                        print(results)
+                        debug_print(results)
                         history.append(
                             {
                                 "tool_calls": [
@@ -271,9 +285,9 @@ class litellm_Chat:
                             and response.choices[0].message.reasoning_content
                         ):
                             reasoning_content = response.choices[0].message.reasoning_content
-                            print(reasoning_content)
+                            debug_print(reasoning_content)
                         response_content = response.choices[0].message.content or ""
-                        print(response_content)
+                        debug_print(response_content)
             elif is_tools_in_sys_prompt == "enable":
                 del completion_kwargs["stream"]
                 response = litellm.completion(**completion_kwargs)
@@ -284,12 +298,12 @@ class litellm_Chat:
                     tool = match.group(1)
                     parameters = match.group(2)
                     json_str = '{"tool": "' + tool + '", "parameters": {' + parameters + "}}"
-                    print("Calling tool: " + tool)
+                    debug_print("Calling tool: " + tool)
                     parameters = json.loads("{" + parameters + "}")
                     from ..llm import dispatch_tool
 
                     results = dispatch_tool(tool, parameters)
-                    print(results)
+                    debug_print(results)
                     history.append({"role": "assistant", "content": json_str})
                     history.append(
                         {
@@ -310,9 +324,9 @@ class litellm_Chat:
                         and response.choices[0].message.reasoning_content
                     ):
                         reasoning_content = response.choices[0].message.reasoning_content
-                        print(reasoning_content)
+                        debug_print(reasoning_content)
                     response_content = response.choices[0].message.content or ""
-                    print(response_content)
+                    debug_print(response_content)
             else:
                 response = litellm.completion(**completion_kwargs)
                 response_content = ""
@@ -324,21 +338,21 @@ class litellm_Chat:
                                 hasattr(chunk.choices[0].delta, "reasoning_content")
                                 and chunk.choices[0].delta.reasoning_content
                             ):
-                                print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                                debug_print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                                 reasoning_content += chunk.choices[0].delta.reasoning_content
                             elif hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
-                                print(chunk.choices[0].delta.content, end="", flush=True)
+                                debug_print(chunk.choices[0].delta.content, end="", flush=True)
                                 response_content += chunk.choices[0].delta.content
-                    print(response_content)
+                    debug_print(response_content)
                 else:
                     if (
                         hasattr(response.choices[0].message, "reasoning_content")
                         and response.choices[0].message.reasoning_content
                     ):
                         reasoning_content = response.choices[0].message.reasoning_content
-                        print(reasoning_content)
+                        debug_print(reasoning_content)
                     response_content = response.choices[0].message.content or ""
-                    print(response_content)
+                    debug_print(response_content)
 
             if isinstance(response_content, str):
                 pattern = r"<think>(.*?)</think>"
