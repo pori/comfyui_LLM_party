@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import base64
+import copy
 import datetime
 import gc
 import glob
@@ -1488,20 +1489,32 @@ class LLM:
         self.id = current_time.strftime("%Y_%m_%d_%H_%M_%S") + str(hash(random.randint(0, 1000000)))
         global instances
         instances.append(self)
-        # 构建prompt.json的绝对路径，如果temp文件夹不存在就创建
-        current_dir_path = os.path.dirname(os.path.abspath(__file__))
-        os.makedirs(os.path.join(current_dir_path, "temp"), exist_ok=True)
-        self.prompt_path = os.path.join(current_dir_path, "temp", str(self.id) + ".json")
-        # 如果文件不存在，创建prompt.json文件，存在就覆盖文件
-        if not os.path.exists(self.prompt_path):
-            with open(self.prompt_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    [{"role": "system", "content": "你是一个强大的人工智能助手。"}], f, indent=4, ensure_ascii=False
-                )
+        # Conversation history defaults to living in memory only, on this
+        # node instance - nothing touches disk unless save_history_to_disk
+        # is explicitly enabled (see chatbot() below, which is also where
+        # self.prompt_path gets set/created on demand for that case).
+        # Previously this unconditionally wrote temp/<id>.json on every
+        # node instantiation, regardless of any setting.
+        self.save_history_to_disk = False
+        self.prompt_path = None
+        self._mem_history = [{"role": "system", "content": "你是一个强大的人工智能助手。"}]
         self.tool_data = {"id": self.id, "system_prompt": "", "type": "api"}
         self.list = []
         self.added_to_list = False
         self.is_locked = "disable"
+
+    def _read_history(self):
+        if self.save_history_to_disk:
+            with open(self.prompt_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return copy.deepcopy(self._mem_history)
+
+    def _write_history(self, history):
+        if self.save_history_to_disk:
+            with open(self.prompt_path, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=4, ensure_ascii=False)
+        else:
+            self._mem_history = copy.deepcopy(history)
 
     @classmethod
     def INPUT_TYPES(s):
@@ -1555,6 +1568,12 @@ class LLM:
                 # reasoning model. Streaming trickles tokens continuously,
                 # so an idle/body timeout only fires on a genuine stall.
                 "stream": ("BOOLEAN", {"default": True, "tooltip": "Whether to enable streaming output."}),
+                # Off by default: this node's conversation history (your
+                # prompts and the model's responses) stays in memory for
+                # this node only and is never written to disk. Enable to
+                # persist it to a JSON file under this pack's temp/ folder,
+                # which also lets you resume it later via historical_record.
+                "save_history_to_disk": ("BOOLEAN", {"default": False, "tooltip": "Whether to save this node's conversation history to a JSON file on disk (under custom_nodes/ComfyUI-LLM-Party/temp/), so it can be resumed later via historical_record. Off by default - history otherwise stays in memory only and is never written to disk."}),
             },
         }
 
@@ -1610,6 +1629,7 @@ class LLM:
         user_history=None,
         img_URL=None,
         stream=True,
+        save_history_to_disk=False,
     ):
         if not is_enable:
             return (
@@ -1641,14 +1661,26 @@ class LLM:
             user_history,
             img_URL,
             stream,
+            save_history_to_disk,
         ]
         if user_prompt is None:
             user_prompt = user_prompt_input
         elif user_prompt_input is not None:
             user_prompt = user_prompt + user_prompt_input
-        if historical_record != "":
+        self.save_history_to_disk = save_history_to_disk
+        if self.save_history_to_disk:
             temp_path = os.path.join(current_dir_path, "temp")
-            self.prompt_path = os.path.join(temp_path, historical_record)
+            os.makedirs(temp_path, exist_ok=True)
+            if historical_record != "":
+                self.prompt_path = os.path.join(temp_path, historical_record)
+            else:
+                if not self.prompt_path:
+                    self.prompt_path = os.path.join(temp_path, str(self.id) + ".json")
+                if not os.path.exists(self.prompt_path):
+                    with open(self.prompt_path, "w", encoding="utf-8") as f:
+                        json.dump(
+                            [{"role": "system", "content": "你是一个强大的人工智能助手。"}], f, indent=4, ensure_ascii=False
+                        )
         self.tool_data["system_prompt"] = system_prompt
         if system_prompt_input is not None and system_prompt is not None:
             system_prompt = system_prompt + system_prompt_input
@@ -1688,8 +1720,7 @@ class LLM:
 
         llm_tools_json = json.dumps(llm_tools, ensure_ascii=False, indent=4)
         if (user_prompt is None or user_prompt.strip() == "") and (images is None or images == []) and (user_history is None or user_history == [] or user_history.strip() == ""):
-            with open(self.prompt_path, "r", encoding="utf-8") as f:
-                history = json.load(f)
+            history = self._read_history()
             return (
                 "",
                 str(history),
@@ -1700,11 +1731,9 @@ class LLM:
         else:
             try:
                 if is_memory == "disable" or "clear party memory" in user_prompt:
-                    with open(self.prompt_path, "w", encoding="utf-8") as f:
-                        json.dump([{"role": "system", "content": system_prompt}], f, indent=4, ensure_ascii=False)
+                    self._write_history([{"role": "system", "content": system_prompt}])
                     if "clear party memory" in user_prompt:
-                        with open(self.prompt_path, "r", encoding="utf-8") as f:
-                            history = json.load(f)
+                        history = self._read_history()
                         return (
                             "party memory has been cleared, please ask me again, powered by LLM party!",
                             str(history),
@@ -1714,8 +1743,7 @@ class LLM:
                         )
                 api_keys = load_api_keys(config_path)
 
-                with open(self.prompt_path, "r", encoding="utf-8") as f:
-                    history = json.load(f)
+                history = self._read_history()
                 if user_history != "" and user_history is not None:
                     try:
                         history = json.loads(user_history)
@@ -1813,8 +1841,7 @@ class LLM:
                 history_get.extend(history_copy)
                 history_get.extend(history[1:])
                 history = history_get
-                with open(self.prompt_path, "w", encoding="utf-8") as f:
-                    json.dump(history, f, indent=4, ensure_ascii=False)
+                self._write_history(history)
                 history = json.dumps(history, ensure_ascii=False,indent=4)
                 global image_buffer
                 if image_buffer != [] and image_buffer is not None:
@@ -2313,21 +2340,33 @@ class LLM_local:
         self.id = current_time.strftime("%Y_%m_%d_%H_%M_%S") + str(hash(random.randint(0, 1000000)))
         global instances
         instances.append(self)
-        # 构建prompt.json的绝对路径，如果temp文件夹不存在就创建
-        current_dir_path = os.path.dirname(os.path.abspath(__file__))
-        os.makedirs(os.path.join(current_dir_path, "temp"), exist_ok=True)
-        self.prompt_path = os.path.join(current_dir_path, "temp", str(self.id) + ".json")
-        # 如果文件不存在，创建prompt.json文件，存在就覆盖文件
-        if not os.path.exists(self.prompt_path):
-            with open(self.prompt_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    [{"role": "system", "content": "你是一个强大的人工智能助手。"}], f, indent=4, ensure_ascii=False
-                )
+        # Conversation history defaults to living in memory only, on this
+        # node instance - nothing touches disk unless save_history_to_disk
+        # is explicitly enabled (see chatbot() below, which is also where
+        # self.prompt_path gets set/created on demand for that case).
+        # Previously this unconditionally wrote temp/<id>.json on every
+        # node instantiation, regardless of any setting.
+        self.save_history_to_disk = False
+        self.prompt_path = None
+        self._mem_history = [{"role": "system", "content": "你是一个强大的人工智能助手。"}]
         self.tool_data = {"id": self.id, "system_prompt": "", "type": "local"}
         self.list = []
         self.added_to_list = False
         self.is_locked = "disable"
         self.images = []
+
+    def _read_history(self):
+        if self.save_history_to_disk:
+            with open(self.prompt_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return copy.deepcopy(self._mem_history)
+
+    def _write_history(self, history):
+        if self.save_history_to_disk:
+            with open(self.prompt_path, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=4, ensure_ascii=False)
+        else:
+            self._mem_history = copy.deepcopy(history)
 
     @classmethod
     def INPUT_TYPES(s):
@@ -2374,6 +2413,12 @@ class LLM_local:
                 "extra_parameters": ("DICT", {"forceInput": True, "tooltip": "Extra parameters for the LLM."}),
                 "user_history": ("STRING", {"forceInput": True, "tooltip": "User history, you can directly input a JSON string containing multiple rounds of dialogue here."}),
                 "is_enable_system_role": (["enable", "disable"], {"default": "enable","tooltip": "Whether to enable the system role for the LLM."}),
+                # Off by default: this node's conversation history (your
+                # prompts and the model's responses) stays in memory for
+                # this node only and is never written to disk. Enable to
+                # persist it to a JSON file under this pack's temp/ folder,
+                # which also lets you resume it later via historical_record.
+                "save_history_to_disk": ("BOOLEAN", {"default": False, "tooltip": "Whether to save this node's conversation history to a JSON file on disk (under custom_nodes/ComfyUI-LLM-Party/temp/), so it can be resumed later via historical_record. Off by default - history otherwise stays in memory only and is never written to disk."}),
             },
         }
 
@@ -2426,6 +2471,7 @@ class LLM_local:
         extra_parameters=None,
         user_history=None,
         is_enable_system_role="enable",
+        save_history_to_disk=False,
     ):
         if not is_enable:
             return (
@@ -2455,14 +2501,26 @@ class LLM_local:
             extra_parameters,
             user_history,
             is_enable_system_role,
+            save_history_to_disk,
         ]
         if user_prompt is None:
             user_prompt = user_prompt_input
         elif user_prompt_input is not None:
             user_prompt = user_prompt + user_prompt_input
-        if historical_record != "":
+        self.save_history_to_disk = save_history_to_disk
+        if self.save_history_to_disk:
             temp_path = os.path.join(current_dir_path, "temp")
-            self.prompt_path = os.path.join(temp_path, historical_record)
+            os.makedirs(temp_path, exist_ok=True)
+            if historical_record:
+                self.prompt_path = os.path.join(temp_path, historical_record)
+            else:
+                if not self.prompt_path:
+                    self.prompt_path = os.path.join(temp_path, str(self.id) + ".json")
+                if not os.path.exists(self.prompt_path):
+                    with open(self.prompt_path, "w", encoding="utf-8") as f:
+                        json.dump(
+                            [{"role": "system", "content": "你是一个强大的人工智能助手。"}], f, indent=4, ensure_ascii=False
+                        )
         self.tool_data["system_prompt"] = system_prompt
         if system_prompt_input is not None and system_prompt is not None:
             system_prompt = system_prompt + system_prompt_input
@@ -2501,8 +2559,7 @@ class LLM_local:
         ]
         llm_tools_json = json.dumps(llm_tools, ensure_ascii=False, indent=4)
         if (user_prompt is None or user_prompt.strip() == "") and (image is None or image == []) and (user_history is None or user_history == [] or user_history.strip() == ""):
-            with open(self.prompt_path, "r", encoding="utf-8") as f:
-                history = json.load(f)
+            history = self._read_history()
             return (
                 "",
                 str(history),
@@ -2513,19 +2570,16 @@ class LLM_local:
             try:
                 if is_memory == "disable" or "clear party memory" in user_prompt:
                     self.images= []
-                    with open(self.prompt_path, "w", encoding="utf-8") as f:
-                        json.dump([{"role": "system", "content": system_prompt}], f, indent=4, ensure_ascii=False)
+                    self._write_history([{"role": "system", "content": system_prompt}])
                     if "clear party memory" in user_prompt:
-                        with open(self.prompt_path, "r", encoding="utf-8") as f:
-                            history = json.load(f)
+                        history = self._read_history()
                         return (
                             "party memory has been cleared, please ask me again, powered by LLM party!",
                             str(history),
                             llm_tools_json,
                             None,
                         )
-                with open(self.prompt_path, "r", encoding="utf-8") as f:
-                    history = json.load(f)
+                history = self._read_history()
                 if user_history != "" and user_history is not None:
                     try:
                         history = json.loads(user_history)
@@ -2958,8 +3012,7 @@ class LLM_local:
                 if is_enable_system_role == "disable":
                     if history[0]["role"] == "user":
                         history[0]["role"]= "system"
-                with open(self.prompt_path, "w", encoding="utf-8") as f:
-                    json.dump(history, f, indent=4, ensure_ascii=False)
+                self._write_history(history)
                 for his in history:
                     if his["role"] == "user":
                         # 如果his["content"]是个列表，则只保留"type" : "text"时的"text"属性内容
